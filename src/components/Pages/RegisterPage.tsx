@@ -58,7 +58,7 @@ const RegisterPage: React.FC = () => {
     try {
       const success = await register(formData.username, formData.email, formData.password);
       if (success) {
-        navigate('/dashboard');
+        navigate('/login');
       } else {
         setErrors({ general: 'Registration failed. Email may already be in use.' });
       }

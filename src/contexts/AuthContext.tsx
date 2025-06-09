@@ -1,16 +1,19 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { v4 as uuidv4 } from 'uuid';
-import { User, AuthContextType, AuditLog } from '../types';
-import { hashPassword, verifyPassword, sanitizeInput, isValidEmail, isStrongPassword, checkRateLimit } from '../utils/security';
-import { 
-  getUserByEmail, 
-  saveUser, 
-  getCurrentUser, 
-  setCurrentUser, 
-  clearUserSession,
-  setAuthToken,
-  saveAuditLog 
-} from '../utils/storage';
+import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+  User as FirebaseUser,
+} from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase'; // Import dari file firebase.ts kita
+import { User, AuthContextType } from '../types'; // Tipe data kita tetap sama
+
+// Kita tidak lagi butuh file-file ini untuk autentikasi
+// import { v4 as uuidv4 } from 'uuid';
+// import { hashPassword, verifyPassword, sanitizeInput, isValidEmail, isStrongPassword, checkRateLimit } from '../utils/security';
+// import { getUserByEmail, saveUser, getCurrentUser, setCurrentUser, clearUserSession, setAuthToken, saveAuditLog } from '../utils/storage';
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
@@ -26,61 +29,69 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // 2. Listener status autentikasi dari Firebase
+  // Ini adalah "jantung" dari sistem login kita yang baru.
   useEffect(() => {
-    // Load user from storage on app start
-    const storedUser = getCurrentUser();
-    if (storedUser) {
-      setUser(storedUser);
-    }
-    setIsLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
+      if (firebaseUser) {
+        // Pengguna berhasil login (dari Firebase Auth)
+        // Sekarang, kita ambil data profilnya dari database Firestore
+        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        const userDoc = await getDoc(userDocRef);
+
+        if (userDoc.exists()) {
+          // Gabungkan data dari Auth dan Firestore menjadi satu objek User
+          setUser({
+            id: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            ...userDoc.data(),
+          } as User);
+        }
+      } else {
+        // Pengguna logout
+        setUser(null);
+      }
+      setIsLoading(false);
+    });
+
+    // Cleanup listener saat komponen di-unmount
+    return () => unsubscribe();
   }, []);
 
-  const createAuditLog = (action: string, details: string, userId?: string) => {
-    const log: AuditLog = {
-      id: uuidv4(),
-      user_id: userId || user?.id || 'anonymous',
-      action,
-      details,
-      timestamp: new Date().toISOString(),
-      ip_address: 'localhost' // In production, get real IP
-    };
-    saveAuditLog(log);
+  // 3. Fungsi register BARU menggunakan Firebase
+  const register = async (username: string, email: string, password: string): Promise<boolean> => {
+    try {
+      // Buat pengguna di Firebase Authentication
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+
+      // Setelah berhasil, simpan data profil tambahan di Firestore
+      const newUser: Omit<User, 'id'> = {
+        username,
+        email,
+        role: 'user',
+        points: 0,
+        created_at: new Date().toISOString(),
+      };
+      
+      // Gunakan UID dari Auth sebagai ID dokumen di Firestore
+      await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
+
+      await signOut(auth);
+      
+      return true;
+    } catch (error) {
+      console.error('Registration error:', error);
+      // Anda bisa menambahkan penanganan error yang lebih baik di sini
+      return false;
+    }
   };
 
+  // 4. Fungsi login BARU menggunakan Firebase
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
-      // Rate limiting check
-      if (!checkRateLimit(`login_${email}`, 5, 300000)) { // 5 attempts per 5 minutes
-        createAuditLog('LOGIN_RATE_LIMITED', `Rate limit exceeded for email: ${email}`);
-        throw new Error('Too many login attempts. Please try again later.');
-      }
-
-      const sanitizedEmail = sanitizeInput(email).toLowerCase();
-      
-      if (!isValidEmail(sanitizedEmail)) {
-        throw new Error('Invalid email format');
-      }
-
-      const existingUser = getUserByEmail(sanitizedEmail);
-      if (!existingUser) {
-        createAuditLog('LOGIN_FAILED', `Login attempt with non-existent email: ${sanitizedEmail}`);
-        throw new Error('Invalid credentials');
-      }
-
-      const isPasswordValid = await verifyPassword(password, existingUser.password_hash || '');
-      if (!isPasswordValid) {
-        createAuditLog('LOGIN_FAILED', `Invalid password for user: ${existingUser.id}`, existingUser.id);
-        throw new Error('Invalid credentials');
-      }
-
-      // Generate auth token (in production, use JWT)
-      const authToken = `token_${uuidv4()}_${Date.now()}`;
-      
-      setUser(existingUser);
-      setCurrentUser(existingUser);
-      setAuthToken(authToken);
-      
-      createAuditLog('LOGIN_SUCCESS', `User logged in successfully`, existingUser.id);
+      await signInWithEmailAndPassword(auth, email, password);
+      // onAuthStateChanged akan otomatis menangani pembaruan state user
       return true;
     } catch (error) {
       console.error('Login error:', error);
@@ -88,75 +99,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const register = async (username: string, email: string, password: string): Promise<boolean> => {
-    try {
-      // Rate limiting check
-      if (!checkRateLimit(`register_${email}`, 3, 3600000)) { // 3 attempts per hour
-        createAuditLog('REGISTER_RATE_LIMITED', `Rate limit exceeded for email: ${email}`);
-        throw new Error('Too many registration attempts. Please try again later.');
-      }
-
-      const sanitizedUsername = sanitizeInput(username);
-      const sanitizedEmail = sanitizeInput(email).toLowerCase();
-
-      // Validation
-      if (!sanitizedUsername || sanitizedUsername.length < 3) {
-        throw new Error('Username must be at least 3 characters long');
-      }
-
-      if (!isValidEmail(sanitizedEmail)) {
-        throw new Error('Invalid email format');
-      }
-
-      if (!isStrongPassword(password)) {
-        throw new Error('Password must be at least 8 characters with uppercase, lowercase, number, and special character');
-      }
-
-      // Check if user already exists
-      const existingUser = getUserByEmail(sanitizedEmail);
-      if (existingUser) {
-        createAuditLog('REGISTER_FAILED', `Registration attempt with existing email: ${sanitizedEmail}`);
-        throw new Error('User already exists with this email');
-      }
-
-      // Create new user
-      const hashedPassword = await hashPassword(password);
-      const newUser: User = {
-        id: uuidv4(),
-        username: sanitizedUsername,
-        email: sanitizedEmail,
-        role: 'user',
-        points: 0,
-        created_at: new Date().toISOString(),
-        password_hash: hashedPassword
-      } as User & { password_hash: string };
-
-      saveUser(newUser);
-      
-      // Remove password_hash before setting user state
-      const { password_hash, ...userWithoutPassword } = newUser;
-      
-      setUser(userWithoutPassword);
-      setCurrentUser(userWithoutPassword);
-      
-      // Generate auth token
-      const authToken = `token_${uuidv4()}_${Date.now()}`;
-      setAuthToken(authToken);
-      
-      createAuditLog('REGISTER_SUCCESS', `New user registered: ${sanitizedUsername}`, newUser.id);
-      return true;
-    } catch (error) {
-      console.error('Registration error:', error);
-      return false;
-    }
-  };
-
+  // 5. Fungsi logout BARU menggunakan Firebase
   const logout = () => {
-    if (user) {
-      createAuditLog('LOGOUT', `User logged out`, user.id);
-    }
-    setUser(null);
-    clearUserSession();
+    signOut(auth);
+    // onAuthStateChanged akan otomatis membersihkan state user
   };
 
   const value: AuthContextType = {
@@ -164,12 +110,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     login,
     register,
     logout,
-    isLoading
+    isLoading,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

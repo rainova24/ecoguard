@@ -62,22 +62,36 @@ const HomePage: React.FC = () => {
             </p>
             
             {user ? (
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Link
-                  to="/reports"
-                  className="bg-emerald-500 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-emerald-600 transition-colors flex items-center justify-center space-x-2"
-                >
-                  <MapPin className="h-5 w-5" />
-                  <span>Submit Report</span>
-                </Link>
-                <Link
-                  to="/dashboard"
-                  className="bg-white text-emerald-500 border-2 border-emerald-500 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-emerald-50 transition-colors"
-                >
-                  View Dashboard
-                </Link>
-              </div>
+              user.role === 'admin' ? (
+                // Tampilan Tombol untuk ADMIN
+                <div className="flex justify-center">
+                  <Link
+                    to="/admin"
+                    className="bg-emerald-500 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-emerald-600 transition-colors"
+                  >
+                    Go to Admin Dashboard
+                  </Link>
+                </div>
+              ) : (
+                // Tampilan Tombol untuk PENGGUNA BIASA
+                <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                  <Link
+                    to="/reports"
+                    className="bg-emerald-500 text-white px-8 py-4 rounded-lg text-lg font-semibold hover:bg-emerald-600 transition-colors flex items-center justify-center space-x-2"
+                  >
+                    <MapPin className="h-5 w-5" />
+                    <span>Submit Report</span>
+                  </Link>
+                  <Link
+                    to="/dashboard"
+                    className="bg-white text-emerald-500 border-2 border-emerald-500 px-8 py-4 rounded-lg text-lg font-semibold hover:bg-emerald-50 transition-colors"
+                  >
+                    View Dashboard
+                  </Link>
+                </div>
+              )
             ) : (
+              // Tampilan Tombol untuk PENGGUNA YANG BELUM LOGIN (tidak berubah)
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Link
                   to="/register"

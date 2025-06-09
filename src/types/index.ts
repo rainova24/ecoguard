@@ -13,7 +13,11 @@ export interface Report {
   location: {
     lat: number;
     lng: number;
-    address?: string;
+    province: string;
+    city: string;
+    district: string;
+    village: string;
+    fullAddress: string;
   };
   description: string;
   photo_url?: string;

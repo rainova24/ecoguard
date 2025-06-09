@@ -1,24 +1,28 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { v4 as uuidv4 } from 'uuid';
+import { db } from '../firebase';
+import {
+  collection,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  doc,
+  getDoc,
+  increment,
+  query,
+  where,
+  writeBatch
+} from 'firebase/firestore';
 import { Report, Reward, UserReward } from '../types';
 import { useAuth } from './AuthContext';
-import {
-  getReports,
-  saveReport,
-  getRewards,
-  getUserRewards,
-  saveUserReward,
-  saveUser,
-  getUserById
-} from '../utils/storage';
 
 interface DataContextType {
   reports: Report[];
   rewards: Reward[];
   userRewards: UserReward[];
-  createReport: (reportData: Omit<Report, 'id' | 'user_id' | 'timestamp' | 'status'>) => void;
-  updateReportStatus: (reportId: string, status: Report['status']) => void;
-  redeemReward: (rewardId: string) => boolean;
+  createReport: (reportData: Omit<Report, 'id' | 'user_id' | 'timestamp' | 'status'>) => Promise<void>;
+  updateReportStatus: (reportId: string, status: Report['status'], reportUserId: string) => Promise<void>;
+  redeemReward: (rewardId: string) => Promise<boolean>;
+  cancelReport: (reportId: string, userId: string) => Promise<void>;
   refreshData: () => void;
 }
 
@@ -38,81 +42,106 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [userRewards, setUserRewards] = useState<UserReward[]>([]);
 
+  const fetchData = () => {
+    const reportsQuery = query(collection(db, 'reports'));
+    onSnapshot(reportsQuery, (snapshot) => {
+      const reportsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Report[];
+      setReports(reportsData);
+    });
+
+    const rewardsQuery = query(collection(db, 'rewards'));
+    onSnapshot(rewardsQuery, (snapshot) => {
+      const rewardsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Reward[];
+      setRewards(rewardsData);
+    });
+
+    if (user) {
+      const userRewardsQuery = query(collection(db, 'userRewards'), where('user_id', '==', user.id));
+      onSnapshot(userRewardsQuery, (snapshot) => {
+        const userRewardsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UserReward[];
+        setUserRewards(userRewardsData);
+      });
+    } else {
+      setUserRewards([]);
+    }
+  };
+  
+  useEffect(() => {
+    fetchData();
+  }, [user]);
+  
   const refreshData = () => {
-    setReports(getReports());
-    setRewards(getRewards());
-    setUserRewards(getUserRewards());
+    fetchData();
   };
 
-  useEffect(() => {
-    refreshData();
-  }, []);
-
-  const createReport = (reportData: Omit<Report, 'id' | 'user_id' | 'timestamp' | 'status'>) => {
+  const createReport = async (reportData: Omit<Report, 'id' | 'user_id' | 'timestamp' | 'status'>) => {
     if (!user) return;
-
-    const newReport: Report = {
-      id: uuidv4(),
+    const newReport = {
       user_id: user.id,
       timestamp: new Date().toISOString(),
-      status: 'pending',
-      ...reportData
+      status: 'pending' as 'pending',
+      ...reportData,
     };
-
-    saveReport(newReport);
-    
-    // Award points for reporting
-    const updatedUser = { ...user, points: user.points + 10 };
-    saveUser(updatedUser);
-    
-    refreshData();
+    await addDoc(collection(db, 'reports'), newReport);
+    const userDocRef = doc(db, 'users', user.id);
+    await updateDoc(userDocRef, {
+      points: increment(10),
+    });
   };
 
-  const updateReportStatus = (reportId: string, status: Report['status']) => {
-    const report = reports.find(r => r.id === reportId);
-    if (!report) return;
-
-    const updatedReport = { ...report, status };
-    saveReport(updatedReport);
-
-    // Award additional points for resolved reports
+  const updateReportStatus = async (reportId: string, status: Report['status'], reportUserId: string) => {
+    const reportDocRef = doc(db, 'reports', reportId);
+    await updateDoc(reportDocRef, { status });
+  
     if (status === 'resolved') {
-      const reportUser = getUserById(report.user_id);
-      if (reportUser) {
-        const updatedUser = { ...reportUser, points: reportUser.points + 15 };
-        saveUser(updatedUser);
+      const userDocRef = doc(db, 'users', reportUserId);
+      const userDoc = await getDoc(userDocRef);
+      if (userDoc.exists() && userDoc.data().role !== 'admin') {
+        await updateDoc(userDocRef, {
+          points: increment(15),
+        });
       }
     }
+  };
+  
+  const redeemReward = async (rewardId: string): Promise<boolean> => {
+    if (!user) return false;
+    const reward = rewards.find(r => r.id === rewardId);
+    if (!reward || user.points < reward.points_required) return false;
 
-    refreshData();
+    const batch = writeBatch(db);
+    const newUserRewardRef = doc(collection(db, 'userRewards'));
+    const newUserReward: Omit<UserReward, 'id'> = {
+        user_id: user.id,
+        reward_id: rewardId,
+        points_redeemed: reward.points_required,
+        reward_item: reward.name,
+        redeemed_at: new Date().toISOString()
+    };
+    batch.set(newUserRewardRef, newUserReward);
+    
+    const userDocRef = doc(db, 'users', user.id);
+    batch.update(userDocRef, {
+        points: increment(-reward.points_required)
+    });
+    
+    await batch.commit();
+    return true;
   };
 
-  const redeemReward = (rewardId: string): boolean => {
-    if (!user) return false;
+  const cancelReport = async (reportId: string, userId: string) => {
+    if (!user || user.id !== userId) return;
 
-    const reward = rewards.find(r => r.id === rewardId);
-    if (!reward || user.points < reward.points_required) {
-      return false;
-    }
+    const batch = writeBatch(db);
+    const reportDocRef = doc(db, 'reports', reportId);
+    batch.delete(reportDocRef);
 
-    // Create user reward record
-    const newUserReward: UserReward = {
-      id: uuidv4(),
-      user_id: user.id,
-      reward_id: rewardId,
-      points_redeemed: reward.points_required,
-      reward_item: reward.name,
-      redeemed_at: new Date().toISOString()
-    };
+    const userDocRef = doc(db, 'users', userId);
+    batch.update(userDocRef, {
+      points: increment(-10)
+    });
 
-    saveUserReward(newUserReward);
-
-    // Deduct points from user
-    const updatedUser = { ...user, points: user.points - reward.points_required };
-    saveUser(updatedUser);
-
-    refreshData();
-    return true;
+    await batch.commit();
   };
 
   const value: DataContextType = {
@@ -122,12 +151,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     createReport,
     updateReportStatus,
     redeemReward,
-    refreshData
+    cancelReport,
+    refreshData,
   };
 
-  return (
-    <DataContext.Provider value={value}>
-      {children}
-    </DataContext.Provider>
-  );
+  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 };
