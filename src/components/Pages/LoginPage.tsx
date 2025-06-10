@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { Leaf, Mail, Lock, AlertCircle } from 'lucide-react';
+import { Leaf, Mail, Lock, AlertCircle, RefreshCw } from 'lucide-react';
 
 const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -9,23 +9,53 @@ const LoginPage: React.FC = () => {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
+  // 1. State baru untuk captcha
+  const [captchaQuestion, setCaptchaQuestion] = useState('');
+  const [captchaAnswer, setCaptchaAnswer] = useState(0);
+  const [userCaptchaInput, setUserCaptchaInput] = useState('');
+
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  // 2. Fungsi untuk menghasilkan pertanyaan captcha baru
+  const generateCaptcha = () => {
+    const num1 = Math.floor(Math.random() * 10) + 1; // Angka acak 1-10
+    const num2 = Math.floor(Math.random() * 10) + 1; // Angka acak 1-10
+    setCaptchaQuestion(`${num1} + ${num2} = ?`);
+    setCaptchaAnswer(num1 + num2);
+  };
+
+  // 3. useEffect untuk memanggil captcha saat halaman pertama kali dimuat
+  useEffect(() => {
+    generateCaptcha();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setIsLoading(true);
 
+    // 4. Tambahkan validasi captcha sebelum login
+    if (parseInt(userCaptchaInput, 10) !== captchaAnswer) {
+      setError('Jawaban captcha salah. Silakan coba lagi.');
+      generateCaptcha(); // Buat pertanyaan baru
+      setUserCaptchaInput(''); // Kosongkan input
+      return; // Hentikan proses login
+    }
+
+    setIsLoading(true);
     try {
       const success = await login(email, password);
       if (success) {
         navigate('/');
       } else {
-        setError('Invalid email or password. Please try again.');
+        setError('Email atau password salah. Silakan coba lagi.');
+        generateCaptcha(); // Buat pertanyaan baru jika login gagal
+        setUserCaptchaInput('');
       }
     } catch (err) {
-      setError('Login failed. Please try again.');
+      setError('Login gagal. Silakan coba lagi nanti.');
+      generateCaptcha();
+      setUserCaptchaInput('');
     } finally {
       setIsLoading(false);
     }
@@ -94,6 +124,29 @@ const LoginPage: React.FC = () => {
                   className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500 transition-colors"
                   placeholder="Enter your password"
                 />
+              </div>
+            </div>
+
+            {/* 5. Tampilkan captcha di dalam form */}
+            <div>
+              <label htmlFor="captcha" className="block text-sm font-medium text-gray-700 mb-2">Security Check</label>
+              <div className="flex items-center space-x-4">
+                <div className="bg-gray-200 text-gray-800 font-mono text-lg tracking-widest px-4 py-3 rounded-lg">
+                  {captchaQuestion}
+                </div>
+                <input 
+                  id="captcha" 
+                  name="captcha" 
+                  type="number" 
+                  required 
+                  value={userCaptchaInput} 
+                  onChange={(e) => setUserCaptchaInput(e.target.value)} 
+                  className="block w-full px-3 py-3 border border-gray-300 rounded-lg focus:ring-emerald-500 focus:border-emerald-500" 
+                  placeholder="Jawaban" 
+                />
+                <button type="button" onClick={generateCaptcha} title="Refresh Captcha" className="p-3 text-gray-500 hover:text-emerald-600">
+                  <RefreshCw className="h-5 w-5" />
+                </button>
               </div>
             </div>
 

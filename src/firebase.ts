@@ -3,15 +3,15 @@ import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// TODO: Ganti dengan konfigurasi proyek Firebase Anda
+// Konfigurasi Firebase sekarang dibaca dari Environment Variables
 const firebaseConfig = {
-    apiKey: "AIzaSyA3mQLT29RwvUKTSZZThd-AtOV6sDGMGok",
-    authDomain: "ecoguard-project.firebaseapp.com",
-    projectId: "ecoguard-project",
-    storageBucket: "ecoguard-project.firebasestorage.app",
-    messagingSenderId: "729127717768",
-    appId: "1:729127717768:web:4a8e1a9c491cd6c3cc483d",
-    measurementId: "G-Z56V0H4XRE"
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 // Inisialisasi Firebase
