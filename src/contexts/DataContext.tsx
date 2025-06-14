@@ -10,7 +10,8 @@ import {
   increment,
   query,
   where,
-  writeBatch
+  writeBatch,
+  deleteDoc
 } from 'firebase/firestore';
 import { Report, Reward, UserReward } from '../types';
 import { useAuth } from './AuthContext';
@@ -23,7 +24,10 @@ interface DataContextType {
   updateReportStatus: (reportId: string, status: Report['status'], reportUserId: string) => Promise<void>;
   redeemReward: (rewardId: string) => Promise<boolean>;
   cancelReport: (reportId: string, userId: string) => Promise<void>;
-  refreshData: () => void;
+  // Fungsi CRUD Baru untuk Rewards
+  createReward: (rewardData: Omit<Reward, 'id'>) => Promise<void>;
+  updateReward: (rewardId: string, rewardData: Partial<Reward>) => Promise<void>;
+  deleteReward: (rewardId: string) => Promise<void>;
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
@@ -42,38 +46,37 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [rewards, setRewards] = useState<Reward[]>([]);
   const [userRewards, setUserRewards] = useState<UserReward[]>([]);
 
-  const fetchData = () => {
+  useEffect(() => {
+    // Listener untuk Laporan
     const reportsQuery = query(collection(db, 'reports'));
-    onSnapshot(reportsQuery, (snapshot) => {
-      const reportsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Report[];
-      setReports(reportsData);
+    const unsubscribeReports = onSnapshot(reportsQuery, (snapshot) => {
+      setReports(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Report[]);
     });
 
+    // Listener untuk Hadiah
     const rewardsQuery = query(collection(db, 'rewards'));
-    onSnapshot(rewardsQuery, (snapshot) => {
-      const rewardsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Reward[];
-      setRewards(rewardsData);
+    const unsubscribeRewards = onSnapshot(rewardsQuery, (snapshot) => {
+      setRewards(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Reward[]);
     });
 
+    // Listener untuk Hadiah Pengguna
+    let unsubscribeUserRewards = () => {};
     if (user) {
       const userRewardsQuery = query(collection(db, 'userRewards'), where('user_id', '==', user.id));
-      onSnapshot(userRewardsQuery, (snapshot) => {
-        const userRewardsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UserReward[];
-        setUserRewards(userRewardsData);
+      unsubscribeUserRewards = onSnapshot(userRewardsQuery, (snapshot) => {
+        setUserRewards(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as UserReward[]);
       });
     } else {
       setUserRewards([]);
     }
-  };
-  
-  useEffect(() => {
-    fetchData();
+
+    return () => {
+      unsubscribeReports();
+      unsubscribeRewards();
+      unsubscribeUserRewards();
+    };
   }, [user]);
   
-  const refreshData = () => {
-    fetchData();
-  };
-
   const createReport = async (reportData: Omit<Report, 'id' | 'user_id' | 'timestamp' | 'status'>) => {
     if (!user) return;
     const newReport = {
@@ -143,8 +146,23 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     await batch.commit();
   };
+  
+  // --- FUNGSI CRUD BARU UNTUK REWARDS ---
+  const createReward = async (rewardData: Omit<Reward, 'id'>) => {
+    await addDoc(collection(db, 'rewards'), rewardData);
+  };
 
-  const value: DataContextType = {
+  const updateReward = async (rewardId: string, rewardData: Partial<Reward>) => {
+    const rewardDocRef = doc(db, 'rewards', rewardId);
+    await updateDoc(rewardDocRef, rewardData);
+  };
+
+  const deleteReward = async (rewardId: string) => {
+    const rewardDocRef = doc(db, 'rewards', rewardId);
+    await deleteDoc(rewardDocRef);
+  };
+
+  const value = {
     reports,
     rewards,
     userRewards,
@@ -152,8 +170,10 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     updateReportStatus,
     redeemReward,
     cancelReport,
-    refreshData,
+    createReward,
+    updateReward,
+    deleteReward,
   };
 
-  return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
+  return <DataContext.Provider value={value as DataContextType}>{children}</DataContext.Provider>;
 };
